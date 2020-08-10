@@ -1,0 +1,4 @@
+PR_MODEL: 'mobilenet_v2'
+GC_LAYER: [1280]
+PATH: '/home/xuyin/UGNet_local/project'  
+ 
