@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Wed Jul 22 17:14:20 2020
+Created on Thu Aug  6 11:34:03 2020
 
 @author: xuyin
 """
 
 import argparse
 import logging
-import os
-import sys
+
 
 import numpy as np
 import torch
@@ -30,7 +29,6 @@ from unet_modified import Unet_groupcat
 
 
 from torch.utils.tensorboard import SummaryWriter
-from utils.dataset import BasicDataset
 from torch.utils.data import DataLoader, random_split
 import torch.nn.functional as F
 from util import AvgMeter
@@ -38,16 +36,59 @@ from newdataset_modified import MultiDataset
 
 
 from config_defaults import _C as cfg
+import math
 
 #import segmentation_models_pytorch as smp
 
 
 
 import pdb
+import os
 
-
-    
-    
+##############################################
+###### BEGIN CUSTOM CLUSTER OVERHEAD
+#import os
+#import signal
+#import sys
+#
+#
+#class ClusterStateManager:
+#    def __init__(self, time_to_run=600): ####need to change time to run ??600s
+#        self.external_exit = None
+#        self.timer_exit = False
+#
+#        signal.signal(signal.SIGTERM, self.signal_handler)
+#        signal.signal(signal.SIGINT, self.signal_handler)
+#        signal.signal(signal.SIGALRM, self.timer_handler)
+#        signal.alarm(time_to_run)
+#
+#    def signal_handler(self, signal, frame):
+#        print("Received signal [", signal, "]")
+#        self.external_exit = signal
+#
+#    def timer_handler(self, signal, frame):
+#        print("Received alarm [", signal, "]")
+#        self.timer_exit = True
+#
+#    def should_exit(self):
+#        if self.timer_exit:
+#            return True
+#
+#        if self.external_exit is not None:
+#            return True
+#
+#        return False
+#
+#    def get_exit_code(self):
+#        if self.timer_exit:
+#            return 3
+#
+#        if self.external_exit is not None:
+#            return 0
+#
+#        return 0
+#    
+##############################################    
 
 
 classes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
@@ -66,6 +107,10 @@ label_ratio = [0.04233976974675504, 0.014504436907968913, 0.017173225930738712,
 label_weight = 1 / np.log(1.02 + np.array(label_ratio))
 label_weight[drop] = 0
 label_weight = label_weight.astype(np.float32)                    ####tangent image has four, Todo: take a careful look at tangent image
+
+
+# Start the timer on how long you're allowed to run
+#csm = ClusterStateManager(3600)
 
 
 
@@ -185,6 +230,10 @@ def train_net(net,
     else:
         criterion = nn.BCEWithLogitsLoss()
     
+    
+    #record_steps=math.floor(len(train_loader)/3)
+    
+    
     if not skip_train:
         for epoch in range(start_epoch, epochs):
             train_state=dict()
@@ -198,6 +247,11 @@ def train_net(net,
                 
                 
                 for step_i, [rgb,depth,semantic] in enumerate(train_loader):
+                    # Test if you should exit.
+                    # ClusterStateManager will create signal handlers for and 
+                    # create a state for you to query
+                    #if csm.should_exit():
+                        #break
                     
                     mask_type = torch.float32 if net.n_classes == 1 else torch.long
                     s=rgb.shape[0]
@@ -214,9 +268,14 @@ def train_net(net,
                     
                     loss = criterion(masks_pred, true_masks)
                     
-                    epoch_loss.update(loss.item())    
-                   
-                    pbar.set_postfix(**{'loss (batch)': loss.item()})
+                    epoch_loss.update(loss.item()) 
+                      
+                   # if train_data_eval and step_i%math.floor(len(train_loader)/3)==0:
+                       # writer.add_image('Tangent_images/train', masks_pred)    ###TODO: add true masks, make_grid
+                       # writer.add_image('Sphere images/train', sphere_pred)    ###TODO: add sphere_true, grid
+                        
+                    
+                    pbar.set_postfix(**{'loss (batch)': epoch_loss.avg})
     
                     optimizer.zero_grad()
                     loss.backward()
@@ -224,45 +283,81 @@ def train_net(net,
     
                     pbar.update(s)          
                     global_step += 1
+                    
+                        
+            writer.add_scalar('Loss/train',epoch_loss.avg,epoch)
+            
+            #if train_data_eval:
+                #writer.add_scalar('Miou/train',epoch_loss.avg)
+                #writer.add_scalar('Accuracy/train',epoch_loss.avg)                 ###TODO: train_data_eval prameter,calculate accuracy,miou 
+                        
+                       
+            
             
             if eval_epoch:
-                ious, accs, tot, ious2, accs2=eval_net(net,val_loader, device)
-                logging.info('Tagent MIoU: {}'.format(np.mean(ious)))
-                logging.info('Mean Tagent Accuracy: {}'.format(np.mean(accs)))
-                logging.info('MIoU: {}'.format(np.mean(ious)))
-                logging.info('Mean Accuracy: {}'.format(np.mean(accs)))
+                ious, accs, tot, ious2, accs2=eval_net(net,val_loader,device,writer)
+                ious_mean=np.mean(ious)
+                accs_mean=np.mean(accs)
+                ious2_mean=np.mean(ious2)
+                accs2_mean=np.mean(accs2)
+                
+                logging.info('Tagent MIoU: {}'.format(ious_mean))
+                logging.info('Mean Tagent Accuracy: {}'.format(accs_mean))
+                logging.info('MIoU: {}'.format(ious2_mean))
+                logging.info('Mean Accuracy: {}'.format(accs2_mean))
                 logging.info('Avg loss: {}'.format(tot))
-            
+                
   
             train_state['epoch']=epoch+1
             train_state['state_dict']=net.state_dict()
-            train_state['IOU']=ious
-            train_state['mean_IOU']=np.mean(ious)
-            train_state['Accuracy']=accs
-            train_state['mean_Accuracy']=np.mean(accs)
+            train_state['IOU']=ious2
+            train_state['mean_IOU']=ious2_mean
+            train_state['Accuracy']=accs2
+            train_state['mean_Accuracy']=accs2_mean
+            train_state['tangent_IOU']=ious
+            train_state['tangent_Accuracy']=accs
+            train_state['tangent_mean_IOU']=ious_mean
+            train_state['tangent_mean_Accuracy']=accs_mean
             train_state['Avg_loss']=tot
-            if save_cp:
+            
+            
+            writer.add_scalar('Loss/test',tot,epoch)
+            writer.add_scalar('Tangent_Acc/test',accs_mean)
+            writer.add_scalar('Tangent_IOU/test',ious_mean)
+            writer.add_scalar('Sphere_Acc/test',accs2_mean)
+            writer.add_scalar('Sphere_IOU/test',ious2_mean)
+            
+            if  best_avg_acc < accs2_mean:
                 try:
                     os.mkdir(check_exi_path)
                     logging.info('Created checkpoint directory')
                 except OSError:
                     pass
+                best_avg_acc=accs2_mean
                 torch.save(train_state,
-                           check_exi_path + f'/latest.pth')
-                logging.info(f'Checkpoint saved !')
-                
-                
-            if  best_avg_acc < np.mean(accs):
-                try:
-                    os.mkdir(check_exi_path)
-                    logging.info('Created checkpoint directory')
-                except OSError:
-                    pass
-                best_avg_acc=np.mean(accs)
-                torch.save(train_state,
-                           check_exi_path + f'/best.pth')
+                       check_exi_path + f'/best.pth')
                 logging.info(f'Best_model saved !')
                 
+            
+            
+            
+            # Once again check if we should exit
+            #if csm.should_exit():
+                #break
+            
+        
+        if save_cp:
+            try:
+                os.mkdir(check_exi_path)
+                logging.info('Created checkpoint directory')
+            except OSError:
+                pass
+            torch.save(train_state,
+                       check_exi_path + f'/latest.pth')
+            logging.info(f'Checkpoint saved !')
+                
+                
+        
     
         writer.close()
     else:
@@ -342,29 +437,32 @@ if __name__ == '__main__':
     net.to(device=device)
    
     
-    try:
-        train_net(net=net,
-                  device=device,
-                  solid_name=cfg.SOLID,
-                  angle=cfg.CROSSWISE,
-                  path=cfg.PATH,
-                  ypropx=cfg.YPROPX,
-                  nov=cfg.NOV,
-                  nol=cfg.NOL,
-                  eval_epoch=cfg.EVAL_EPOCH,
-                  epochs=cfg.EPOCHS,
-                  batch_size=cfg.BATCH_SIZE,
-                  lr=cfg.LR,
-                  decay=cfg.DECAY,
-                  save_cp=cfg.SAVE_CP,
-                  skip_train=cfg.SKIP_TRAIN,
-                  choose_model=cfg.CHOOSE_MODEL,
-                  layer_multiply=cfg.LAYER_MULTIPLY,
-                  n_element=cfg.N_ELEMENT,
-                  resolui=cfg.RESI,
-                  resoluj=cfg.RESJ,
-                  pretrain=cfg.PRETRAIN
+    train_net(net=net,
+              device=device,
+              solid_name=cfg.SOLID,
+              angle=cfg.CROSSWISE,
+              path=cfg.PATH,
+              ypropx=cfg.YPROPX,
+              nov=cfg.NOV,
+              nol=cfg.NOL,
+              eval_epoch=cfg.EVAL_EPOCH,
+              epochs=cfg.EPOCHS,
+              batch_size=cfg.BATCH_SIZE,
+              lr=cfg.LR,
+              decay=cfg.DECAY,
+              save_cp=cfg.SAVE_CP,
+              skip_train=cfg.SKIP_TRAIN,
+              choose_model=cfg.CHOOSE_MODEL,
+              layer_multiply=cfg.LAYER_MULTIPLY,
+              n_element=cfg.N_ELEMENT,
+              resolui=cfg.RESI,
+              resoluj=cfg.RESJ,
+              pretrain=cfg.PRETRAIN
                   )
+    # Exit with the exit code the ClusterStateManager has set for you
+    #print("Exiting with exit code", csm.get_exit_code())
+    #sys.exit(csm.get_exit_code())
+        
         
     #except KeyboardInterrupt:
         #torch.save(net.state_dict(), 'INTERRUPTED.pth')

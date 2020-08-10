@@ -37,7 +37,6 @@ from unet_modified import Unet_groupcat
 
 
 from torch.utils.tensorboard import SummaryWriter
-from utils.dataset import BasicDataset
 from torch.utils.data import DataLoader, random_split
 import torch.nn.functional as F
 from util import AvgMeter
@@ -239,7 +238,7 @@ def train_net(net,
         criterion = nn.BCEWithLogitsLoss()
     
     
-    record_steps=math.floor(len(train_loader)/3)
+    #record_steps=math.floor(len(train_loader)/3)
     
     
     if not skip_train:
@@ -337,7 +336,16 @@ def train_net(net,
             
             
             
-            
+            if  best_avg_acc < accs2_mean:
+                try:
+                    os.mkdir(check_exi_path)
+                    logging.info('Created checkpoint directory')
+                except OSError:
+                    pass
+                best_avg_acc=accs2_mean
+                torch.save(train_state,
+                           check_exi_path + f'/best.pth')
+                logging.info(f'Best_model saved !')
             
             # Once again check if we should exit
             if csm.should_exit():
@@ -355,16 +363,7 @@ def train_net(net,
             logging.info(f'Checkpoint saved !')
                 
                 
-        if  best_avg_acc < accs2_mean:
-            try:
-                os.mkdir(check_exi_path)
-                logging.info('Created checkpoint directory')
-            except OSError:
-                pass
-            best_avg_acc=accs2_mean
-            torch.save(train_state,
-                       check_exi_path + f'/best.pth')
-            logging.info(f'Best_model saved !')
+        
                 
     
         writer.close()
