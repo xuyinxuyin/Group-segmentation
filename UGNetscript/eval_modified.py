@@ -73,17 +73,18 @@ def eval_net(net, loader, device, writer):
     batch_size=loader.batch_size
     
     if solid_format=='cir':
-                 uv_grid=np.load('/home/xuyin/UGNet_local/project_'+str(nol)+'_'+str(nov)+'_'+str(resolui)+'_'+str(resoluj)+'_'+str(angle)+'_'+str(ypropx)+'uv_grid.npy')
+                 uv_grid=np.load('/home/xuyin/Group-segmentation/project_'+str(nol)+'_'+str(nov)+'_'+str(resolui)+'_'+str(resoluj)+'_'+str(angle)+'_'+str(ypropx)+'uv_grid.npy')
                  #mask_pred=mask_pred.view(-1,nov*nol,mask_pred.shape[1],mask_pred.shape[2])
                  uv_grid=torch.from_numpy(uv_grid).to(device)
     else:
-                 uv_grid=np.load('/home/xuyin/UGNet_local/project_'+str(nol)+'_'+str(nov)+'_'+str(resolui)+'_'+str(resoluj)+'_'+str(angle)+'_'+str(ypropx)+'uv_grid.npy')
+                 uv_grid=np.load('/home/xuyin/Group-segmentation/project_'+str(nol)+'_'+str(nov)+'_'+str(resolui)+'_'+str(resoluj)+'_'+str(angle)+'_'+str(ypropx)+'uv_grid.npy')
                  #mask_pred=mask_pred.view(-1,nov*nol,mask_pred.shape[1],mask_pred.shape[2]) 
                  uv_grid=torch.from_numpy(uv_grid).to(device)                                                                                #### need to change
     uv_grid=uv_grid.repeat(batch_size,1,1,1,1) ###[n,1,2048,4096,3]
     
     
     pretty_label=np.load('pretty_label.npy')
+    pretty_label=torch.from_numpy(pretty_label).to(device)
     #pretty_label=torch.from_numpy(pretty_label).to(device) ###not sure whether need to change cuda
     
     #record_grid_idx=torch.zeros(60,2,resolu,resolu)
@@ -97,18 +98,18 @@ def eval_net(net, loader, device, writer):
     record_steps=math.floor(len(loader)/3)
     with tqdm(total=n_val, desc='Validation round', unit='img', leave=False) as pbar:
     #with tqdm(total=n_val, desc='Validation round', unit='img') as pbar:   
-        for step_i, [rgb,depth,semantic,semantic2] in enumerate(loader):
+        for step_i, [input_im,true_masks,semantic2] in enumerate(loader):
             mask_type = torch.float32 if net.n_classes == 1 else torch.long
-            s=rgb.shape[0]
-            rgb=rgb.to(device,dtype=torch.float32).permute(0,1,4,2,3)
+            s=input_im.shape[0]
+            input_im=input_im.to(device,dtype=torch.float32).permute(0,1,4,2,3)
             
             
-            depth=depth.to(device,dtype=torch.float32).permute(0,1,4,2,3)
-            semantic=semantic.to(device,dtype=mask_type).permute(0,1,4,2,3)
-            input_img=torch.cat([rgb,depth],axis=2)
-            imgs=input_img.view(-1,input_img.shape[2],input_img.shape[3],input_img.shape[4])
+            #depth=depth.to(device,dtype=torch.float32).permute(0,1,4,2,3)
+            true_masks=true_masks.to(device,dtype=mask_type).permute(0,1,4,2,3)
+            #input_img=torch.cat([rgb,depth],axis=2)
+            input_im=input_im.contiguous().view(-1,input_im.shape[2],input_im.shape[3],input_im.shape[4])
             ###[basi*n_views(2*12),3,224,224]
-            true_masks=semantic.view(-1,semantic.shape[2],semantic.shape[3],semantic.shape[4]).squeeze()
+            true_masks=true_masks.contiguous().view(-1,true_masks.shape[2],true_masks.shape[3],true_masks.shape[4]).squeeze()
             #[ba_si*60,224,224]
             
           
@@ -122,7 +123,7 @@ def eval_net(net, loader, device, writer):
             
             
             with torch.no_grad():
-                output= net(imgs)
+                output= net(input_im)
             
            
             tot += F.cross_entropy(output, true_masks,weight=w)
@@ -138,11 +139,15 @@ def eval_net(net, loader, device, writer):
             accs += tpos
             per_cls_counts += pcc
             
-            mask_pred=mask_pred.view(-1,1,nov*nol,mask_pred.shape[1],mask_pred.shape[2]).double()
+            mask_pred=mask_pred.view(-1,1,nov*nol,mask_pred.shape[1],mask_pred.shape[2]).double() #[b,c(1),nov,h,w]
             
             
-            sphere_mask=F.grid_sample(mask_pred, uv_grid,mode='nearest')
-            sphere_mask=torch.squeeze(sphere_mask,1) ###rduce channel, which is 1
+            sphere_mask=F.grid_sample(mask_pred, uv_grid,mode='nearest',align_corners=True)
+            sphere_mask=torch.squeeze(torch.squeeze(sphere_mask,1),1) ###rduce channel, from [b,c(1),1,2048,4096] to [b.2048,4096]
+            
+            #mask_pred=mask_pred.permute(0,2,1,3,4)  ###[b,1,nov, h, w] to [b,nov,1, h,w]
+            mask_pred=mask_pred.reshape(-1,mask_pred.shape[3],mask_pred.shape[4])
+            
             
             int2_, uni2_ = iou_score(sphere_mask, true_sphere_masks)
             tpos2, pcc2 = accuracy(sphere_mask, true_sphere_masks)
@@ -158,13 +163,14 @@ def eval_net(net, loader, device, writer):
             
             
             
-            mask_pred=np.stack([pretty_label[:,0][mask_pred],pretty_label[:,1][sphere_mask],pretty_label[:,2][sphere_mask]],1)
-            true_masks=np.stack([pretty_label[:,0][true_masks],pretty_label[:,1][true_masks],pretty_label[:,2][true_masks]],1)
+            mask_pred=torch.stack([pretty_label[:,0][mask_pred.long()],pretty_label[:,1][mask_pred.long()],pretty_label[:,2][mask_pred.long()]],1)
+            true_masks=torch.stack([pretty_label[:,0][true_masks.long()],pretty_label[:,1][true_masks.long()],pretty_label[:,2][true_masks.long()]],1)
             
-            sphere_mask=np.stack([pretty_label[:,0][sphere_mask],pretty_label[:,1][sphere_mask],pretty_label[:,2][sphere_mask]],1)
-            true_sphere_masks=np.stack([pretty_label[:,0][true_sphere_masks],pretty_label[:,1][true_sphere_masks],pretty_label[:,2][true_sphere_masks]],1)
+            sphere_mask=torch.stack([pretty_label[:,0][sphere_mask.long()],pretty_label[:,1][sphere_mask.long()],pretty_label[:,2][sphere_mask.long()]],1)
+            true_sphere_masks=torch.stack([pretty_label[:,0][true_sphere_masks.long()],pretty_label[:,1][true_sphere_masks.long()],pretty_label[:,2][true_sphere_masks.long()]],1)
             
             if step_i% record_steps==0:
+            #if step_i == 0:
                 writer.add_image('Tangent_images/test',
                                  vision.utils.make_grid(torch.cat([mask_pred,true_masks],0),4))
                 ###[2*b_size*n_views(2*12),1,224,224]

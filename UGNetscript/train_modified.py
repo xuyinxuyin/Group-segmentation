@@ -192,16 +192,18 @@ def train_net(net,
     optimizer = optim.SGD(net.parameters(), lr=lr, weight_decay=1e-8)
     
     
-    print(check_exi_path+ f'/best.pth')
+    #print(check_exi_path+ f'/best.pth')
     if os.path.exists(check_exi_path+ f'/latest.pth'):
         checkpoint = torch.load(check_exi_path+f'/latest.pth')
         net.load_state_dict(checkpoint['state_dict'])
         #optimizer.load_state_dict(checkpoint['optimizer'])
         start_epoch=checkpoint['epoch']
+        del checkpoint
     if os.path.exists(check_exi_path+ f'/best.pth'):
         checkpoint = torch.load(check_exi_path+f'/best.pth')
         best_avg_acc=checkpoint['mean_Accuracy']
         best_mean_iou=checkpoint['mean_IOU']
+        del checkpoint
         
     
     if start_epoch>epochs:
@@ -240,13 +242,12 @@ def train_net(net,
             net.train()
             epoch_loss = AvgMeter()
             
-            if decay:
-                 scheduler.step(epoch+1)
+            
             
             with tqdm(total=n_train, desc=f'Epoch {epoch + 1}/{epochs}', unit='img') as pbar:
                 
                 
-                for step_i, [rgb,depth,semantic] in enumerate(train_loader):
+                for step_i, [input_im,semantic] in enumerate(train_loader):
                     # Test if you should exit.
                     # ClusterStateManager will create signal handlers for and 
                     # create a state for you to query
@@ -254,22 +255,24 @@ def train_net(net,
                         #break
                     
                     mask_type = torch.float32 if net.n_classes == 1 else torch.long
-                    s=rgb.shape[0]
-                    rgb=rgb.to(device,dtype=torch.float32).permute(0,1,4,2,3)      ###(b,g,3,w,h)
-                    depth=depth.to(device,dtype=torch.float32).permute(0,1,4,2,3)
-                    semantic=semantic.to(device,dtype=mask_type).permute(0,1,4,2,3)
+                    s=input_im.shape[0]
+                    input_im=input_im.to(device,dtype=torch.float32).permute(0,1,4,2,3).contiguous()     ###(b,g,4,w,h)
+                    #depth=depth.to(device,dtype=torch.float32).permute(0,1,4,2,3)
+                    semantic=semantic.to(device,dtype=mask_type).permute(0,1,4,2,3).contiguous()
+                    
     
-                    input_img=torch.cat([rgb,depth],axis=2) ###(b,g,4,w,h)
-                    imgs=input_img.view(-1,input_img.shape[2],input_img.shape[3],input_img.shape[4]) ##(b*g,4,w,h)
-                    true_masks=semantic.view(-1,semantic.shape[2],semantic.shape[3],semantic.shape[4]).squeeze()  ##(b,g,w,h)
+                    #input_img=torch.cat([rgb,depth],axis=2) ###(b,g,4,w,h)
+                    input_im=input_im.view(-1,input_im.shape[2],input_im.shape[3],input_im.shape[4]) ##(b*g,4,w,h)
+                    
+                    semantic=semantic.view(-1,semantic.shape[2],semantic.shape[3],semantic.shape[4]).squeeze()  ##(b*g,w,h)
                         
           
-                    masks_pred = net(imgs)
+                    masks_pred = net(input_im)
                     
-                    loss = criterion(masks_pred, true_masks)
-                    
+                    loss = criterion(masks_pred, semantic)
+                    #torch.cuda.empty_cache()
                     epoch_loss.update(loss.item()) 
-                      
+                     
                    # if train_data_eval and step_i%math.floor(len(train_loader)/3)==0:
                        # writer.add_image('Tangent_images/train', masks_pred)    ###TODO: add true masks, make_grid
                        # writer.add_image('Sphere images/train', sphere_pred)    ###TODO: add sphere_true, grid
@@ -284,7 +287,8 @@ def train_net(net,
                     pbar.update(s)          
                     global_step += 1
                     
-                        
+            
+                 
             writer.add_scalar('Loss/train',epoch_loss.avg,epoch)
             
             #if train_data_eval:
@@ -322,10 +326,10 @@ def train_net(net,
             
             
             writer.add_scalar('Loss/test',tot,epoch)
-            writer.add_scalar('Tangent_Acc/test',accs_mean)
-            writer.add_scalar('Tangent_IOU/test',ious_mean)
-            writer.add_scalar('Sphere_Acc/test',accs2_mean)
-            writer.add_scalar('Sphere_IOU/test',ious2_mean)
+            writer.add_scalar('Tangent_Acc/test',accs_mean,epoch)
+            writer.add_scalar('Tangent_IOU/test',ious_mean,epoch)
+            writer.add_scalar('Sphere_Acc/test',accs2_mean,epoch)
+            writer.add_scalar('Sphere_IOU/test',ious2_mean,epoch)
             
             if  best_avg_acc < accs2_mean:
                 try:
@@ -338,7 +342,8 @@ def train_net(net,
                        check_exi_path + f'/best.pth')
                 logging.info(f'Best_model saved !')
                 
-            
+            if decay:
+                 scheduler.step(epoch)
             
             
             # Once again check if we should exit
