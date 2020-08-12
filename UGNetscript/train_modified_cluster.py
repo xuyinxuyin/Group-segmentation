@@ -117,7 +117,7 @@ label_weight = label_weight.astype(np.float32)                    ####tangent im
 
 
 # Start the timer on how long you're allowed to run
-csm = ClusterStateManager(3600)
+csm = ClusterStateManager(1500)
 
 
 
@@ -198,6 +198,7 @@ def train_net(net,
     
     optimizer = optim.SGD(net.parameters(), lr=lr, weight_decay=1e-8)
     
+    Record_Flag=0 ###record it exist from the middle of the epoch or after the epoch
     
     print(check_exi_path+ f'/best.pth')
     if os.path.exists(check_exi_path+ f'/latest.pth'):
@@ -205,11 +206,12 @@ def train_net(net,
         net.load_state_dict(checkpoint['state_dict'])
         #optimizer.load_state_dict(checkpoint['optimizer'])
         start_epoch=checkpoint['epoch']
+        del checkpoint
     if os.path.exists(check_exi_path+ f'/best.pth'):
         checkpoint = torch.load(check_exi_path+f'/best.pth')
         best_avg_acc=checkpoint['mean_Accuracy']
         best_mean_iou=checkpoint['mean_IOU']
-        
+        del checkpoint
     
     if start_epoch>epochs:
         skip_train=True
@@ -248,32 +250,32 @@ def train_net(net,
             epoch_loss = AvgMeter()
             
             if decay:
-                 scheduler.step(epoch+1)
+                 scheduler.step(epoch) ###not sure the order
             
             with tqdm(total=n_train, desc=f'Epoch {epoch + 1}/{epochs}', unit='img') as pbar:
                 
                 
-                for step_i, [rgb,depth,semantic] in enumerate(train_loader):
+                for step_i, [input_im,semantic] in enumerate(train_loader):
                     # Test if you should exit.
                     # ClusterStateManager will create signal handlers for and 
                     # create a state for you to query
                     if csm.should_exit():
+                        Record_Flag=1  #### exit from middle of the epoch
                         break
                     
                     mask_type = torch.float32 if net.n_classes == 1 else torch.long
-                    s=rgb.shape[0]
-                    rgb=rgb.to(device,dtype=torch.float32).permute(0,1,4,2,3)      ###(b,g,3,w,h)
-                    depth=depth.to(device,dtype=torch.float32).permute(0,1,4,2,3)
-                    semantic=semantic.to(device,dtype=mask_type).permute(0,1,4,2,3)
+                    s=input_im.shape[0]
+                    input_im=input_im.to(device,dtype=torch.float32).permute(0,1,4,2,3).contiguous()      ###(b,g,4,w,h)
+                    semantic=semantic.to(device,dtype=mask_type).permute(0,1,4,2,3).contiguous()
     
-                    input_img=torch.cat([rgb,depth],axis=2) ###(b,g,4,w,h)
-                    imgs=input_img.view(-1,input_img.shape[2],input_img.shape[3],input_img.shape[4]) ##(b*g,4,w,h)
-                    true_masks=semantic.view(-1,semantic.shape[2],semantic.shape[3],semantic.shape[4]).squeeze()  ##(b,g,w,h)
+                    
+                    input_im=input_im.view(-1,input_im.shape[2],input_im.shape[3],input_im.shape[4]) ##(b*g,4,w,h)
+                    semantic=semantic.view(-1,semantic.shape[2],semantic.shape[3],semantic.shape[4]).squeeze()  ##(b*g,w,h)
                         
           
-                    masks_pred = net(imgs)
+                    masks_pred = net(input_im)
                     
-                    loss = criterion(masks_pred, true_masks)
+                    loss = criterion(masks_pred, semantic)
                     
                     epoch_loss.update(loss.item()) 
                       
@@ -314,8 +316,11 @@ def train_net(net,
                 logging.info('Mean Accuracy: {}'.format(accs2_mean))
                 logging.info('Avg loss: {}'.format(tot))
                 
-  
-            train_state['epoch']=epoch+1
+            if Record_Flag==1:
+                train_state['epoch']=epoch
+            else:
+                train_state['epoch']=epoch+1
+                
             train_state['state_dict']=net.state_dict()
             train_state['IOU']=ious2
             train_state['mean_IOU']=ious2_mean
@@ -329,10 +334,10 @@ def train_net(net,
             
             
             writer.add_scalar('Loss/test',tot,epoch)
-            writer.add_scalar('Tangent_Acc/test',accs_mean)
-            writer.add_scalar('Tangent_IOU/test',ious_mean)
-            writer.add_scalar('Sphere_Acc/test',accs2_mean)
-            writer.add_scalar('Sphere_IOU/test',ious2_mean)
+            writer.add_scalar('Tangent_Acc/test',accs_mean,epoch)
+            writer.add_scalar('Tangent_IOU/test',ious_mean,epoch)
+            writer.add_scalar('Sphere_Acc/test',accs2_mean,epoch)
+            writer.add_scalar('Sphere_IOU/test',ious2_mean,epoch)
             
             
             
@@ -350,7 +355,7 @@ def train_net(net,
             # Once again check if we should exit
             if csm.should_exit():
                 break
-            
+                    
             
         if save_cp:
             try:
