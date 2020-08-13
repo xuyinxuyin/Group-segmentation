@@ -129,6 +129,8 @@ def eval_net(net, loader, device, writer):
             tot += F.cross_entropy(output, true_masks,weight=w)
             mask_pred= output.max(dim=1, keepdim=False)[1] # get the index of the max log-probability;
             #ouput: (ba_si*60,15,224,224)  mask_pred: (ba_si*60,224,224)
+            
+            
             #for sphere grid:
             
             
@@ -140,13 +142,14 @@ def eval_net(net, loader, device, writer):
             per_cls_counts += pcc
             
             mask_pred=mask_pred.view(-1,1,nov*nol,mask_pred.shape[1],mask_pred.shape[2]).double() #[b,c(1),nov,h,w]
-            
-            
             sphere_mask=F.grid_sample(mask_pred, uv_grid,mode='nearest',align_corners=True)
             sphere_mask=torch.squeeze(torch.squeeze(sphere_mask,1),1) ###rduce channel, from [b,c(1),1,2048,4096] to [b.2048,4096]
+            mask_pred=mask_pred.reshape(-1,mask_pred.shape[3],mask_pred.shape[4]) #[b*nov,h,w]
             
-            #mask_pred=mask_pred.permute(0,2,1,3,4)  ###[b,1,nov, h, w] to [b,nov,1, h,w]
-            mask_pred=mask_pred.reshape(-1,mask_pred.shape[3],mask_pred.shape[4])
+            
+            
+            
+            
             
             
             int2_, uni2_ = iou_score(sphere_mask, true_sphere_masks)
@@ -168,6 +171,10 @@ def eval_net(net, loader, device, writer):
             
             sphere_mask=torch.stack([pretty_label[:,0][sphere_mask.long()],pretty_label[:,1][sphere_mask.long()],pretty_label[:,2][sphere_mask.long()]],1)
             true_sphere_masks=torch.stack([pretty_label[:,0][true_sphere_masks.long()],pretty_label[:,1][true_sphere_masks.long()],pretty_label[:,2][true_sphere_masks.long()]],1)
+            
+            
+        
+        
             
             if step_i% record_steps==0:
             #if step_i == 0:

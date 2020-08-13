@@ -117,10 +117,10 @@ label_weight = label_weight.astype(np.float32)                    ####tangent im
 
 
 # Start the timer on how long you're allowed to run
-csm = ClusterStateManager(1500)
+csm = ClusterStateManager(3600)
 
 
-
+logging.getLogger().setLevel(logging.INFO)   ###to output logging.info
 
 ####################################
 def check_arguments(cfg, args):
@@ -185,8 +185,8 @@ def train_net(net,
     n_val=len(test_dataset)
     
     
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True) #####num_worker=0?  if memory is not enough, the pin_memory can be set as False
-    val_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True) #####num_worker=0?  if memory is not enough, the pin_memory can be set as False
+    val_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
     
     
     writer = SummaryWriter(log_path, comment=f'LR_{lr}_BS_{batch_size}')
@@ -198,13 +198,16 @@ def train_net(net,
     
     optimizer = optim.SGD(net.parameters(), lr=lr, weight_decay=1e-8)
     
-    Record_Flag=0 ###record it exist from the middle of the epoch or after the epoch
     
-    print(check_exi_path+ f'/best.pth')
+    if decay:
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.7)
+    #Record_Flag=0 ###record it exist from the middle of the epoch or after the epoch
+    
     if os.path.exists(check_exi_path+ f'/latest.pth'):
         checkpoint = torch.load(check_exi_path+f'/latest.pth')
         net.load_state_dict(checkpoint['state_dict'])
-        #optimizer.load_state_dict(checkpoint['optimizer'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        scheduler.load_state_dict(checkpoint['scheduler'])
         start_epoch=checkpoint['epoch']
         del checkpoint
     if os.path.exists(check_exi_path+ f'/best.pth'):
@@ -229,8 +232,7 @@ def train_net(net,
 
   
     
-    if decay:
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.7)
+    
     
     
     
@@ -249,8 +251,8 @@ def train_net(net,
             net.train()
             epoch_loss = AvgMeter()
             
-            if decay:
-                 scheduler.step(epoch) ###not sure the order
+            #if decay:
+                 #scheduler.step(epoch) ###not sure the order
             
             with tqdm(total=n_train, desc=f'Epoch {epoch + 1}/{epochs}', unit='img') as pbar:
                 
@@ -259,9 +261,9 @@ def train_net(net,
                     # Test if you should exit.
                     # ClusterStateManager will create signal handlers for and 
                     # create a state for you to query
-                    if csm.should_exit():
-                        Record_Flag=1  #### exit from middle of the epoch
-                        break
+#                    if csm.should_exit():
+#                        Record_Flag=1  #### exit from middle of the epoch
+#                        break
                     
                     mask_type = torch.float32 if net.n_classes == 1 else torch.long
                     s=input_im.shape[0]
@@ -293,6 +295,7 @@ def train_net(net,
                     pbar.update(s)          
                     global_step += 1
                     
+                    
                         
             writer.add_scalar('Loss/train',epoch_loss.avg,epoch)
             
@@ -310,27 +313,28 @@ def train_net(net,
                 ious2_mean=np.mean(ious2)
                 accs2_mean=np.mean(accs2)
                 
-                logging.info('Tagent MIoU: {}'.format(ious_mean))
-                logging.info('Mean Tagent Accuracy: {}'.format(accs_mean))
+                #logging.info('Tagent MIoU: {}'.format(ious_mean))
+                #logging.info('Mean Tagent Accuracy: {}'.format(accs_mean))
                 logging.info('MIoU: {}'.format(ious2_mean))
                 logging.info('Mean Accuracy: {}'.format(accs2_mean))
                 logging.info('Avg loss: {}'.format(tot))
                 
-            if Record_Flag==1:
-                train_state['epoch']=epoch
-            else:
-                train_state['epoch']=epoch+1
-                
+            if decay:
+                scheduler.step()
+            
+            train_state['epoch']=epoch+1
             train_state['state_dict']=net.state_dict()
+            train_state['optimizer']=optimizer.state_dict()
+            train_state['scheduler']=scheduler.state_dict()
             train_state['IOU']=ious2
             train_state['mean_IOU']=ious2_mean
             train_state['Accuracy']=accs2
             train_state['mean_Accuracy']=accs2_mean
-            train_state['tangent_IOU']=ious
-            train_state['tangent_Accuracy']=accs
-            train_state['tangent_mean_IOU']=ious_mean
-            train_state['tangent_mean_Accuracy']=accs_mean
-            train_state['Avg_loss']=tot
+            #train_state['tangent_IOU']=ious
+            #train_state['tangent_Accuracy']=accs
+            #train_state['tangent_mean_IOU']=ious_mean
+            #train_state['tangent_mean_Accuracy']=accs_mean
+            #train_state['Avg_loss']=tot
             
             
             writer.add_scalar('Loss/test',tot,epoch)
@@ -351,6 +355,8 @@ def train_net(net,
                 torch.save(train_state,
                            check_exi_path + f'/best.pth')
                 logging.info(f'Best_model saved !')
+            
+            
             
             # Once again check if we should exit
             if csm.should_exit():

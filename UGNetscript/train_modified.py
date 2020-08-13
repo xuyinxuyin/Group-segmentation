@@ -113,7 +113,7 @@ label_weight = label_weight.astype(np.float32)                    ####tangent im
 #csm = ClusterStateManager(3600)
 
 
-
+logging.getLogger().setLevel(logging.INFO)   ###to output logging.info
 
 ####################################
 def check_arguments(cfg, args):
@@ -191,12 +191,15 @@ def train_net(net,
     
     optimizer = optim.SGD(net.parameters(), lr=lr, weight_decay=1e-8)
     
+    if decay:
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.7)
     
     #print(check_exi_path+ f'/best.pth')
     if os.path.exists(check_exi_path+ f'/latest.pth'):
         checkpoint = torch.load(check_exi_path+f'/latest.pth')
         net.load_state_dict(checkpoint['state_dict'])
-        #optimizer.load_state_dict(checkpoint['optimizer'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        scheduler.load_state_dict(checkpoint['scheduler'])
         start_epoch=checkpoint['epoch']
         del checkpoint
     if os.path.exists(check_exi_path+ f'/best.pth'):
@@ -222,8 +225,7 @@ def train_net(net,
 
   
     
-    if decay:
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.7)
+   
     
     
     
@@ -248,35 +250,20 @@ def train_net(net,
                 
                 
                 for step_i, [input_im,semantic] in enumerate(train_loader):
-                    # Test if you should exit.
-                    # ClusterStateManager will create signal handlers for and 
-                    # create a state for you to query
-                    #if csm.should_exit():
-                        #break
-                    
                     mask_type = torch.float32 if net.n_classes == 1 else torch.long
                     s=input_im.shape[0]
                     input_im=input_im.to(device,dtype=torch.float32).permute(0,1,4,2,3).contiguous()     ###(b,g,4,w,h)
-                    #depth=depth.to(device,dtype=torch.float32).permute(0,1,4,2,3)
-                    semantic=semantic.to(device,dtype=mask_type).permute(0,1,4,2,3).contiguous()
-                    
-    
-                    #input_img=torch.cat([rgb,depth],axis=2) ###(b,g,4,w,h)
+                    semantic=semantic.to(device,dtype=mask_type).permute(0,1,4,2,3).contiguous()   ####(b,g,1,w,h)
                     input_im=input_im.view(-1,input_im.shape[2],input_im.shape[3],input_im.shape[4]) ##(b*g,4,w,h)
-                    
                     semantic=semantic.view(-1,semantic.shape[2],semantic.shape[3],semantic.shape[4]).squeeze()  ##(b*g,w,h)
                         
           
                     masks_pred = net(input_im)
                     
                     loss = criterion(masks_pred, semantic)
-                    #torch.cuda.empty_cache()
+                    
                     epoch_loss.update(loss.item()) 
-                     
-                   # if train_data_eval and step_i%math.floor(len(train_loader)/3)==0:
-                       # writer.add_image('Tangent_images/train', masks_pred)    ###TODO: add true masks, make_grid
-                       # writer.add_image('Sphere images/train', sphere_pred)    ###TODO: add sphere_true, grid
-                        
+                    
                     
                     pbar.set_postfix(**{'loss (batch)': epoch_loss.avg})
     
@@ -291,12 +278,7 @@ def train_net(net,
                  
             writer.add_scalar('Loss/train',epoch_loss.avg,epoch)
             
-            #if train_data_eval:
-                #writer.add_scalar('Miou/train',epoch_loss.avg)
-                #writer.add_scalar('Accuracy/train',epoch_loss.avg)                 ###TODO: train_data_eval prameter,calculate accuracy,miou 
-                        
-                       
-            
+
             
             if eval_epoch:
                 ious, accs, tot, ious2, accs2=eval_net(net,val_loader,device,writer)
@@ -305,24 +287,29 @@ def train_net(net,
                 ious2_mean=np.mean(ious2)
                 accs2_mean=np.mean(accs2)
                 
-                logging.info('Tagent MIoU: {}'.format(ious_mean))
-                logging.info('Mean Tagent Accuracy: {}'.format(accs_mean))
+                #logging.info('Tagent MIoU: {}'.format(ious_mean))
+                #logging.info('Mean Tagent Accuracy: {}'.format(accs_mean))
                 logging.info('MIoU: {}'.format(ious2_mean))
                 logging.info('Mean Accuracy: {}'.format(accs2_mean))
                 logging.info('Avg loss: {}'.format(tot))
                 
-  
+            
+            if decay:
+                scheduler.step()
+                 
             train_state['epoch']=epoch+1
             train_state['state_dict']=net.state_dict()
+            train_state['optimizer']=optimizer.state_dict()
+            train_state['scheduler']=scheduler.state_dict()
             train_state['IOU']=ious2
             train_state['mean_IOU']=ious2_mean
             train_state['Accuracy']=accs2
             train_state['mean_Accuracy']=accs2_mean
-            train_state['tangent_IOU']=ious
-            train_state['tangent_Accuracy']=accs
-            train_state['tangent_mean_IOU']=ious_mean
-            train_state['tangent_mean_Accuracy']=accs_mean
-            train_state['Avg_loss']=tot
+            #train_state['tangent_IOU']=ious
+            #train_state['tangent_Accuracy']=accs
+            #train_state['tangent_mean_IOU']=ious_mean
+            #train_state['tangent_mean_Accuracy']=accs_mean
+            #train_state['Avg_loss']=tot
             
             
             writer.add_scalar('Loss/test',tot,epoch)
@@ -342,8 +329,7 @@ def train_net(net,
                        check_exi_path + f'/best.pth')
                 logging.info(f'Best_model saved !')
                 
-            if decay:
-                 scheduler.step(epoch)
+           
             
             
             # Once again check if we should exit
